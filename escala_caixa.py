@@ -1,6 +1,6 @@
 import json
 from datetime import date, timedelta
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -15,8 +15,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-ARQUIVO_SALVO = Path("escala_salva.json")
 
 FUNCIONARIOS = [
     "Marcelo Lico",
@@ -193,6 +191,12 @@ def key_slot(bloco, dia, atividade, horario):
     return f"{bloco}_{dia}_{atividade}_{horario}"
 
 
+def limpar_slots_escala():
+    for key in list(st.session_state.keys()):
+        if key.startswith("MANHÃ_") or key.startswith("TARDE_") or key.startswith("NOITE_"):
+            del st.session_state[key]
+
+
 def inicializar_estado():
     if "ausencias" not in st.session_state:
         st.session_state.ausencias = []
@@ -272,69 +276,177 @@ def validar(df):
     return alertas
 
 
-def salvar_escala():
-    dados = {
-        "ausencias": [
-            {
-                "funcionario": a["funcionario"],
-                "inicio": a["inicio"].isoformat(),
-                "fim": a["fim"].isoformat(),
-                "turno": a.get("turno", "Todos"),
-                "motivo": a["motivo"],
-            }
-            for a in st.session_state.ausencias
-        ],
-        "feriados": [
-            {
-                "data": f["data"].isoformat(),
-                "motivo": f["motivo"],
-            }
-            for f in st.session_state.feriados
-        ],
-        "escala": {},
-    }
+def gerar_csv_restauracao(datas):
+    """
+    Gera um CSV único para restaurar:
+    - semana de referência;
+    - escolhas da escala;
+    - ausências;
+    - feriados.
+
+    Esse CSV é baixado pelo usuário e depois pode ser importado no app.
+    Não depende de banco de dados nem de arquivo persistente no servidor.
+    """
+    registros = []
+
+    registros.append({
+        "TipoRegistro": "META",
+        "SemanaInicio": datas[0].isoformat(),
+        "SemanaFim": datas[-1].isoformat(),
+        "Bloco": "",
+        "Dia": "",
+        "Data": "",
+        "Atividade": "",
+        "Horario": "",
+        "Funcionario": "",
+        "Area": "",
+        "Inicio": "",
+        "Fim": "",
+        "Turno": "",
+        "Motivo": "",
+    })
 
     for bloco, linhas in BLOCOS.items():
         for atividade, horario in linhas:
-            for dia in DIAS:
+            for dia, data_ref in zip(DIAS, datas):
                 key = key_slot(bloco, dia, atividade, horario)
-                dados["escala"][key] = st.session_state.get(key, "—")
+                nome = st.session_state.get(key, "—")
 
-    ARQUIVO_SALVO.write_text(
-        json.dumps(dados, ensure_ascii=False, indent=4),
-        encoding="utf-8",
-    )
+                registros.append({
+                    "TipoRegistro": "ESCALA",
+                    "SemanaInicio": datas[0].isoformat(),
+                    "SemanaFim": datas[-1].isoformat(),
+                    "Bloco": bloco,
+                    "Dia": dia,
+                    "Data": data_ref.isoformat(),
+                    "Atividade": atividade,
+                    "Horario": horario,
+                    "Funcionario": nome,
+                    "Area": AREAS.get(nome, ""),
+                    "Inicio": "",
+                    "Fim": "",
+                    "Turno": "",
+                    "Motivo": "",
+                })
+
+    for a in st.session_state.ausencias:
+        registros.append({
+            "TipoRegistro": "AUSENCIA",
+            "SemanaInicio": datas[0].isoformat(),
+            "SemanaFim": datas[-1].isoformat(),
+            "Bloco": "",
+            "Dia": "",
+            "Data": "",
+            "Atividade": "",
+            "Horario": "",
+            "Funcionario": a["funcionario"],
+            "Area": AREAS.get(a["funcionario"], ""),
+            "Inicio": a["inicio"].isoformat(),
+            "Fim": a["fim"].isoformat(),
+            "Turno": a.get("turno", "Todos"),
+            "Motivo": a["motivo"],
+        })
+
+    for f in st.session_state.feriados:
+        registros.append({
+            "TipoRegistro": "FERIADO",
+            "SemanaInicio": datas[0].isoformat(),
+            "SemanaFim": datas[-1].isoformat(),
+            "Bloco": "",
+            "Dia": "",
+            "Data": f["data"].isoformat(),
+            "Atividade": "",
+            "Horario": "",
+            "Funcionario": "",
+            "Area": "",
+            "Inicio": "",
+            "Fim": "",
+            "Turno": "",
+            "Motivo": f["motivo"],
+        })
+
+    df_export = pd.DataFrame(registros)
+    return df_export.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
 
 
-def carregar_escala():
-    if not ARQUIVO_SALVO.exists():
-        return False
+def importar_csv_restauracao(arquivo_csv):
+    """
+    Importa o CSV gerado pelo próprio app e restaura:
+    - st.session_state dos slots;
+    - ausências;
+    - feriados;
+    - semana inicial.
 
-    dados = json.loads(ARQUIVO_SALVO.read_text(encoding="utf-8"))
+    Retorna a segunda-feira da semana importada, caso exista.
+    """
+    df_import = pd.read_csv(arquivo_csv, dtype=str).fillna("")
 
-    st.session_state.ausencias = [
-        {
-            "funcionario": a["funcionario"],
-            "inicio": date.fromisoformat(a["inicio"]),
-            "fim": date.fromisoformat(a["fim"]),
-            "turno": a.get("turno", "Todos"),
-            "motivo": a["motivo"],
-        }
-        for a in dados.get("ausencias", [])
-    ]
+    colunas_obrigatorias = {
+        "TipoRegistro",
+        "SemanaInicio",
+        "Bloco",
+        "Dia",
+        "Data",
+        "Atividade",
+        "Horario",
+        "Funcionario",
+        "Inicio",
+        "Fim",
+        "Turno",
+        "Motivo",
+    }
 
-    st.session_state.feriados = [
-        {
-            "data": date.fromisoformat(f["data"]),
-            "motivo": f["motivo"],
-        }
-        for f in dados.get("feriados", [])
-    ]
+    faltantes = colunas_obrigatorias - set(df_import.columns)
+    if faltantes:
+        raise ValueError(f"CSV inválido. Colunas ausentes: {', '.join(sorted(faltantes))}")
 
-    for key, valor in dados.get("escala", {}).items():
-        st.session_state[key] = valor
+    limpar_slots_escala()
+    st.session_state.ausencias = []
+    st.session_state.feriados = []
 
-    return True
+    semana_importada = None
+
+    meta = df_import[df_import["TipoRegistro"] == "META"]
+    if not meta.empty and meta.iloc[0]["SemanaInicio"]:
+        semana_importada = date.fromisoformat(meta.iloc[0]["SemanaInicio"])
+
+    escala = df_import[df_import["TipoRegistro"] == "ESCALA"]
+    for _, row in escala.iterrows():
+        if not all([row["Bloco"], row["Dia"], row["Atividade"], row["Horario"]]):
+            continue
+
+        key = key_slot(row["Bloco"], row["Dia"], row["Atividade"], row["Horario"])
+        funcionario = row["Funcionario"] or "—"
+
+        if funcionario not in FUNCIONARIOS and funcionario != "—":
+            funcionario = "—"
+
+        st.session_state[key] = funcionario
+
+    ausencias = df_import[df_import["TipoRegistro"] == "AUSENCIA"]
+    for _, row in ausencias.iterrows():
+        if not row["Funcionario"] or not row["Inicio"] or not row["Fim"]:
+            continue
+
+        st.session_state.ausencias.append({
+            "funcionario": row["Funcionario"],
+            "inicio": date.fromisoformat(row["Inicio"]),
+            "fim": date.fromisoformat(row["Fim"]),
+            "turno": row["Turno"] or "Todos",
+            "motivo": row["Motivo"] or "Não informado",
+        })
+
+    feriados = df_import[df_import["TipoRegistro"] == "FERIADO"]
+    for _, row in feriados.iterrows():
+        if not row["Data"]:
+            continue
+
+        st.session_state.feriados.append({
+            "data": date.fromisoformat(row["Data"]),
+            "motivo": row["Motivo"] or "Feriado",
+        })
+
+    return semana_importada
 
 
 def celula_pessoa_html(nome):
@@ -549,20 +661,45 @@ inicializar_estado()
 with st.sidebar:
     st.markdown('<div class="sidebar-title">Configurações</div>', unsafe_allow_html=True)
 
-    data_base = st.date_input("Semana de referência", value=date.today())
+    if "data_base" not in st.session_state:
+        st.session_state.data_base = date.today()
+
+    data_base = st.date_input("Semana de referência", key="data_base")
     segunda = segunda_da_semana(data_base)
     datas = [segunda + timedelta(days=i) for i in range(5)]
 
-    if st.button("💾 Salvar escala", use_container_width=True):
-        salvar_escala()
-        st.success("Escala salva.")
+    st.divider()
+    st.markdown('<div class="sidebar-section">Backup / restauração</div>', unsafe_allow_html=True)
 
-    if st.button("📁 Carregar escala salva", use_container_width=True):
-        if carregar_escala():
-            st.success("Escala carregada.")
-            st.rerun()
-        else:
-            st.warning("Nenhuma escala salva encontrada.")
+    csv_restauracao = gerar_csv_restauracao(datas)
+
+    st.download_button(
+        "💾 Baixar CSV de restauração",
+        data=csv_restauracao,
+        file_name=f"backup_escala_{datas[0].strftime('%Y-%m-%d')}.csv",
+        mime="text/csv",
+        use_container_width=True,
+        help="Baixa um CSV com a semana, ausências, feriados e escolhas da escala.",
+    )
+
+    arquivo_importado = st.file_uploader(
+        "Importar CSV de restauração",
+        type=["csv"],
+        help="Use aqui o CSV baixado anteriormente pelo próprio app.",
+    )
+
+    if arquivo_importado is not None:
+        if st.button("📥 Restaurar escala do CSV", use_container_width=True):
+            try:
+                semana_importada = importar_csv_restauracao(arquivo_importado)
+
+                if semana_importada:
+                    st.session_state.data_base = semana_importada
+
+                st.success("Escala restaurada do CSV.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Não foi possível importar o CSV: {e}")
 
     st.divider()
 
@@ -588,6 +725,7 @@ with st.sidebar:
                 "motivo": motivo_ausencia or "Não informado",
             })
             st.success("Ausência adicionada.")
+            st.rerun()
 
     if st.session_state.ausencias:
         st.caption("Ausências cadastradas")
@@ -619,6 +757,7 @@ with st.sidebar:
             "motivo": motivo_feriado_input or "Feriado",
         })
         st.success("Feriado adicionado.")
+        st.rerun()
 
     if st.session_state.feriados:
         st.caption("Feriados cadastrados")
@@ -639,9 +778,7 @@ with st.sidebar:
     st.divider()
 
     if st.button("🗑️ Limpar escala", use_container_width=True):
-        for key in list(st.session_state.keys()):
-            if key.startswith("MANHÃ_") or key.startswith("TARDE_") or key.startswith("NOITE_"):
-                del st.session_state[key]
+        limpar_slots_escala()
         st.rerun()
 
 
