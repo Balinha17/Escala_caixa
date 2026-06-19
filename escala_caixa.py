@@ -24,7 +24,6 @@ FUNCIONARIOS = [
     "Arthur",
     "Marcelo Costenaro",
     "Gisele",
-    "Cristiane",
     "Michele",
     "Cassio",
     "Larissa",
@@ -32,12 +31,11 @@ FUNCIONARIOS = [
 
 AREAS = {
     "Marcelo Lico": "Faturamento",
-    "Renata": "Faturamento",
     "Michele": "Faturamento",
 
     "Edileny": "Créditos",
     "Marcelo Costenaro": "Créditos",
-    "Cristiane": "Créditos",
+    "Renata": "Créditos",
     "Cassio": "Créditos",
 
     "Airton": "Cobrança",
