@@ -34,13 +34,13 @@ AREAS = {
     "Michele": "Faturamento",
 
     "Edileny": "Créditos",
-    "Marcelo Costenaro": "Créditos",
+    "Marcelo Costenaro": "Cobrança",
     "Renata": "Créditos",
     "Cassio": "Créditos",
 
     "Airton": "Cobrança",
     "Arthur": "Cobrança",
-    "Gisele": "Cobrança",
+    "Gisele": "Créditos",
     "Larissa": "Cobrança",
 }
 
